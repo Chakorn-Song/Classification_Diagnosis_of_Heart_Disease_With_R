@@ -1,0 +1,1437 @@
+---
+title: "Project"
+author: 'Toy'
+date: "2024-04-20"
+output: html_document
+---
+# Project {.tabset}
+## Setup
+```{r setup,echo=TRUE,massage=FALSE,warning=FALSE}
+library(caret)
+library(nnet)
+library(glmnet)
+library(leaps)
+library(dplyr) # for some data preperation
+library(tidyr)
+#Decision Tree
+library(tree)
+#Gradient Boosting
+library(gbm)
+#Random Forest
+library(randomForest) 
+
+#XGBoost
+library(xgboost) # the main algorithm
+library(archdata) # for the sample dataset
+library(Ckmeans.1d.dp) 
+library(ipred)
+library(rpart)
+
+#Import data
+data1 <- read.table("processed.switzerland..data",
+                    header=FALSE,sep=",",na.strings = "?")
+
+data2 <- read.table("reprocessed.hungarian.data",
+                    header=FALSE,sep=" ",na.strings = "?")
+
+data3 <- read.table("processed.cleveland..data",
+                    header=FALSE,sep=",",na.strings = "?")
+
+data4 <- read.table("processed.va.data",
+                    header=FALSE,sep=",",na.strings = "?")
+
+#merge
+data<-rbind(data1,data2,data3,data4)
+
+
+#remove row if data have NA > 3 columns
+#data <- data[rowSums(is.na(data)) <= 3, ]
+
+#Rename
+names(data)[names(data) == "V1"] <- "Age"
+names(data)[names(data) == "V2"] <- "Sex"
+names(data)[names(data) == "V3"] <- "cp"
+names(data)[names(data) == "V4"] <- "trestbps"
+names(data)[names(data) == "V5"] <- "chol"
+names(data)[names(data) == "V6"] <- "fbs"
+names(data)[names(data) == "V7"] <- "restecg"
+names(data)[names(data) == "V8"] <- "thalach"
+names(data)[names(data) == "V9"] <- "exang"
+names(data)[names(data) == "V10"] <- "oldpeak"
+names(data)[names(data) == "V11"] <- "slope"
+names(data)[names(data) == "V12"] <- "ca"
+names(data)[names(data) == "V13"] <- "thal"
+names(data)[names(data) == "V14"] <- "Target"
+#_______________________________________________________________________________
+
+#check outlier
+plot(data$trestbps,main = "before")
+data$trestbps <- ifelse(data$trestbps == -9, NA, data$trestbps)
+data$trestbps <- ifelse(data$trestbps == 0, NA, data$trestbps)
+plot(data$trestbps,main = "After")
+
+plot(data$chol, main = "Before")
+data$chol <- ifelse(data$chol == -9, NA, data$chol)
+data$chol <- ifelse(data$chol == 0, NA, data$chol)
+plot(data$chol, main = "After")
+
+plot(data$fbs, main = "Before")
+data$fbs <- ifelse(data$fbs == -9, NA, data$fbs)
+plot(data$fbs, main = "After")
+
+plot(data$restecg, main = "Before")
+data$restecg <- ifelse(data$restecg == -9, NA, data$restecg)
+plot(data$restecg, main = "After")
+
+plot(data$thalach, main = "Before")
+data$thalach <- ifelse(data$thalach == -9, NA, data$thalach)
+plot(data$thalach, main = "After")
+
+
+plot(data$exang, main = "Before")
+data$exang <- ifelse(data$exang == -9, NA, data$exang)
+plot(data$exang, main = "After")
+
+#plot(data$oldpeak)
+
+plot(data$slope, main = "Before")
+data$slope <- ifelse(data$slope == -9, NA, data$slope)
+plot(data$slope, main = "After")
+
+plot(data$ca, main = "Before")
+data$ca <- ifelse(data$ca == -9, NA, data$ca)
+data$ca <- ifelse(data$ca == 9, NA, data$ca)
+plot(data$ca, main = "After")
+
+plot(data$thal, main = "Before")
+data$thal <- ifelse(data$thal == -9, NA, data$thal)
+plot(data$thal, main = "After")
+
+#plot(data$Target)
+
+summary(data)
+#_______________________________________________________________________________
+
+##fill NA with mean
+library(zoo)
+data <- data[complete.cases(data$Target), ] #remove NA in Target
+data$Age <- na.aggregate(data$Age, by = data$Target)
+data$trestbps <- na.aggregate(data$trestbps, by = data$Target)
+data$chol <- na.aggregate(data$chol, by = data$Target)
+data$thalach <- na.aggregate(data$thalach, by = data$Target)
+data$oldpeak <- na.aggregate(data$oldpeak, by = data$Target)
+
+#find mode function
+calculate_mode <- function(x) {
+  uniq_x <- unique(x)
+  uniq_x[which.max(tabulate(match(x, uniq_x)))]
+}
+
+##fill NA with mode (factor)
+#fbs
+data <- data %>%
+  group_by(Target) %>%
+  mutate(fbs = ifelse(is.na(fbs),
+                      calculate_mode(fbs[!is.na(fbs)]),
+                      fbs)) %>% ungroup()
+
+#restecg
+data <- data %>%
+  group_by(Target) %>%
+  mutate(restecg = ifelse(is.na(restecg),
+                          calculate_mode(restecg[!is.na(restecg)]),
+                          restecg)) %>%
+  ungroup()
+
+#exang
+data <- data %>%
+  group_by(Target) %>%
+  mutate(exang = ifelse(is.na(exang),
+                          calculate_mode(exang[!is.na(exang)]),
+                          exang)) %>% ungroup()
+
+#slope
+data <- data %>%
+  group_by(Target) %>%
+  mutate(slope = ifelse(is.na(slope),
+                          calculate_mode(slope[!is.na(slope)]),
+                          slope)) %>% ungroup()
+
+#ca
+data <- data %>%
+  group_by(Target) %>%
+  mutate(ca = ifelse(is.na(ca),
+                          calculate_mode(ca[!is.na(ca)]),
+                          ca)) %>% ungroup()
+
+#thal
+data <- data %>%
+  group_by(Target) %>%
+  mutate(thal = ifelse(is.na(thal),
+                          calculate_mode(thal[!is.na(thal)]),
+                          thal)) %>% ungroup()
+
+#_______________________________________________________________________________
+#factor
+data$Target <- as.factor(data$Target)
+data$Sex <- as.factor(data$Sex)
+data$cp <- as.factor(data$cp)
+data$fbs <- as.factor(data$fbs)
+data$restecg <- as.factor(data$restecg)
+data$exang <- as.factor(data$exang)
+data$slope <- as.factor(data$slope)
+data$ca <- as.factor(data$ca)
+data$thal <- as.factor(data$thal)
+
+#DataPartition
+split <- createDataPartition(data$Target, p = 0.7, list = FALSE)
+data <- data[split,]
+data.test <- data[-split,]
+
+#before balancing data
+sum(data$Target == "0")
+sum(data$Target == "1")
+sum(data$Target == "2")
+sum(data$Target == "3")
+sum(data$Target == "4")
+
+#Smote
+library(ROSE)
+data34 <- subset(data, data$Target == 3 | data$Target == 4)
+data34.smote <- ovun.sample(Target ~ ., data = data34,method = "over",
+                            N = sum(data$Target == 3)*2)$data
+temp <- subset(data, data[, 14] != 3 & data[, 14] != 4)
+data <- rbind(temp,data34.smote)
+
+summary(data)#80% train with smote
+summary(data.test)#20% test with no smote
+
+#_______________________________________________________________________________
+#function resize matrix to 5x5
+resize <- function(mat) {
+  new_mat <- matrix(0, nrow = 5, ncol = 5)
+  rows_to_copy <- min(nrow(mat), 5)
+  cols_to_copy <- min(ncol(mat), 5)
+  new_mat[1:rows_to_copy, 1:cols_to_copy] <- mat[1:rows_to_copy, 1:cols_to_copy]
+  
+  return(new_mat)
+}
+
+#_______________________________________________________________________________
+## Cross Validation
+#K-fold(10 folds)
+k<-10
+fold <- createFolds(y = 1:nrow(data), k = k, list = TRUE)
+
+```
+
+## Logistic Model {.tabset}
+### Logistic Regression
+```{r LR,echo=TRUE,massage=FALSE,warning=FALSE}
+#performance in train (each fold)
+#precision for each fold
+pc0 <- c()
+pc1 <- c()
+pc2 <- c()
+pc3 <- c()
+pc4 <- c()
+
+#recall for each fold
+rc0 <- c()
+rc1 <- c()
+rc2 <- c()
+rc3 <- c()
+rc4 <- c()
+
+#ac for each fold
+ac <- c()
+#_______________________________________________________________________________
+#table confusion
+tablemat <- matrix(0,nrow=5,ncol=5)
+
+#Model training
+for (i in 1:k) {
+  #train test set
+  train <- unlist(fold[-i])
+  test <- unlist(fold[i])
+  data_train <- data[train, ]
+  data_test <- data[test, ]
+  
+  #model
+  lr.fits <- multinom(Target ~.,data=data_train,trace=F)
+  
+  #prediction
+  predictions <- predict(lr.fits,data_test,type = "prob")
+  predicted <- apply(predictions, 1, which.max)
+  #confusion matrix for each fold
+  table <-table(predicted,data_test$Target)
+  
+  #check and resize matrix predictions
+  if (length(table) != 25){
+    table <- resize(table)
+  }
+  #performance on train set 80% using k-folds
+  ##precision
+  pc0[i] <- table[1,1]/sum(table[,1])
+  pc1[i] <- table[2,2]/sum(table[,2])
+  pc2[i] <- table[3,3]/sum(table[,3])
+  pc3[i] <- table[4,4]/sum(table[,4])
+  pc4[i] <- table[5,5]/sum(table[,5])
+  
+  ##recall
+  rc0[i] <- table[1,1]/sum(table[1,])
+  rc1[i] <- table[2,2]/sum(table[2,])
+  rc2[i] <- table[3,3]/sum(table[3,])
+  rc3[i] <- table[4,4]/sum(table[4,])
+  rc4[i] <- table[5,5]/sum(table[5,])
+  
+  ##Accuracy
+  ac[i] <- sum(diag(table))/sum(table)
+  
+  #confusion matrix
+  tablemat<-tablemat+table
+}
+#_______________________________________________________________________________
+#performance on test set 
+#prediction
+test.set.prediction <- predict(lr.fits,data.test,type="prob")
+predicted.t <- apply(test.set.prediction, 1, which.max)
+
+table = table(predicted.t,data.test$Target)
+#performance 
+ac.t <- sum(diag(table))/sum(table)
+#precision
+pc0t <- table[1,1]/sum(table[,1])
+pc1t <- table[2,2]/sum(table[,2])
+pc2t <- table[3,3]/sum(table[,3])
+pc3t <- table[4,4]/sum(table[,4])
+pc4t <- table[5,5]/sum(table[,5])
+#recall
+rc0t <- table[1,1]/sum(table[1,])
+rc1t <- table[2,2]/sum(table[2,])
+rc2t <- table[3,3]/sum(table[3,])
+rc3t <- table[4,4]/sum(table[4,])
+rc4t <- table[5,5]/sum(table[5,])
+#_______________________________________________________________________________
+#performance matrix on train set
+model.LR.perf <- matrix(c(mean(ac),mean(pc0),mean(pc1),mean(pc2),
+                          mean(pc3),mean(pc4),mean(rc0),mean(rc1),
+                          mean(rc2),mean(rc3),mean(rc4)),
+                          nrow = 11, ncol = 1, byrow = FALSE)
+
+#performance matrix on test set (Best model)
+model.LR.perf.test <- matrix(c(ac.t,pc0t,pc1t,pc2t,pc3t,pc4t,
+                               rc0t,rc1t,rc2t,rc3t,rc4t),
+                             nrow = 11, ncol = 1, byrow = FALSE)
+
+#format.4f
+model.LR.perf.formatted <- matrix(sprintf("%.4f", model.LR.perf.test),
+                                  nrow = 11, ncol = 1,
+                                  dimnames = list(c("Accuracy","Precision type0",
+                                                    "Precision type1","Precision type2",
+                                                    "Precision type3","Precision type4",
+                                                    "Recall type0","Recall type1",
+                                                    "Recall type2","Recall type3",
+                                                    "Recall type4"),
+                                                  c("Logistic Regression")))
+
+
+#output
+print(model.LR.perf.formatted)
+cat("Confusion Matrix :","\n")
+print(table)
+```
+
+### Logistic Lasso Regression
+```{r L1,echo=TRUE,massage=FALSE,warning=FALSE}
+#Pre-select best lambda from cv.glmnet
+#Set x,y
+x <- model.matrix(Target ~ ., data = data)
+y <- data$Target
+
+lasso.logis.reg <- cv.glmnet(x,y,
+                             alpha = 1,
+                             family = "multinomial")
+
+#pre-selected lambda
+best_lambda <- lasso.logis.reg$lambda.min
+
+#expand best lambda
+expanded_lambda <- seq(best_lambda * 0.9, best_lambda * 1.1, length.out = 10)
+#_______________________________________________________________________________
+#Accuracy for each fold
+ac<-c()
+
+#precision for each fold
+pc0 <- c()
+pc1 <- c()
+pc2 <- c()
+pc3 <- c()
+pc4 <- c()
+
+#recall for each fold
+rc0 <- c()
+rc1 <- c()
+rc2 <- c()
+rc3 <- c()
+rc4 <- c()
+
+#table confusion
+tablemat <- matrix(0,nrow=5,ncol=5)
+#_______________________________________________________________________________
+#Model training
+for (i in 1:k) {
+  #train test
+  train <- unlist(fold[-i])
+  test <- unlist(fold[i])
+  data_train <- data[train, ]
+  data_test <- data[test, ]
+  
+  #set x y
+  x.train <- as.matrix(data_train[,-14])
+  y.train <- data_train$Target
+  
+  #lasso model (pre lambda)
+  lasso.pl <- cv.glmnet(x.train, y.train, family ="multinomial",
+                  alpha = 1,
+                  lambda = expanded_lambda)
+  x.test <- as.matrix(data_test[,-14])
+  
+  #prediction
+  predictions <- predict(lasso.pl,newx=x.test,type="response")
+  predicted <- apply(predictions, 1, which.max)
+  
+  #confusion matrix
+  table <- table(predicted,data_test$Target)
+  
+  #resize
+  if (length(table) != 25){
+    table <- resize(table)
+  }
+  tablemat <- tablemat + table
+  
+  #performance on train set 80% using k-folds
+  ##accuracy
+  ac[i] <- sum(diag(table))/sum(table)
+  
+  ##precision
+  pc0[i] <- table[1,1]/sum(table[,1])
+  pc1[i] <- table[2,2]/sum(table[,2])
+  pc2[i] <- table[3,3]/sum(table[,3])
+  pc3[i] <- table[4,4]/sum(table[,4])
+  pc4[i] <- table[5,5]/sum(table[,5])
+  
+  ##recall
+  rc0[i] <- table[1,1]/sum(table[1,])
+  rc1[i] <- table[2,2]/sum(table[2,])
+  rc2[i] <- table[3,3]/sum(table[3,])
+  rc3[i] <- table[4,4]/sum(table[4,])
+  rc4[i] <- table[5,5]/sum(table[5,])
+}
+#_______________________________________________________________________________
+#prediction on test set
+x.test <- x.test <- as.matrix(data.test[,-14])
+predictions <- predict(lasso.pl,newx=x.test,type="response")
+predicted <- apply(predictions, 1, which.max)
+table <- table(predicted,data.test$Target)
+#performance on test set
+ac.t <- sum(diag(table))/sum(table)
+#precision
+pc0t <- table[1,1]/sum(table[,1])
+pc1t <- table[2,2]/sum(table[,2])
+pc2t <- table[3,3]/sum(table[,3])
+pc3t <- table[4,4]/sum(table[,4])
+pc4t <- table[5,5]/sum(table[,5])
+#recall
+rc0t <- table[1,1]/sum(table[1,])
+rc1t <- table[2,2]/sum(table[2,])
+rc2t <- table[3,3]/sum(table[3,])
+rc3t <- table[4,4]/sum(table[4,])
+rc4t <- table[5,5]/sum(table[5,])
+#_______________________________________________________________________________
+#performance on train
+model.Lasso.perf <- matrix(c(mean(ac),mean(pc0),mean(pc1),
+                              mean(pc2),mean(pc3),mean(pc4),
+                              mean(rc0),mean(rc1),mean(rc2),
+                              mean(rc3),mean(rc4)),
+                           nrow = 11, ncol = 1, byrow = FALSE)
+
+#performance on test
+model.Lasso.perf.test <- matrix(c(ac.t,pc0t,pc1t,pc2t,pc3t,pc4t,
+                          rc0t,rc1t,rc2t,rc3t,rc4t),
+                       nrow = 11, ncol = 1, byrow = FALSE)
+
+#format.4f
+model.Lasso.perf.formatted <- matrix(sprintf("%.4f", model.Lasso.perf.test),
+                                  nrow = 11, ncol = 1,
+                                  dimnames = list(c("Accuracy","Precision type0",
+                                                    "Precision type1","Precision type2",
+                                                    "Precision type3","Precision type4",
+                                                    "Recall type0","Recall type1",
+                                                    "Recall type2","Recall type3",
+                                                    "Recall type4"),
+                                                  c("Logistic Lasso regression")))
+
+#output
+print(model.Lasso.perf.formatted)
+cat("Confusion Matrix :","\n")
+print(table)
+cat("\n","Lambda :",lasso.pl$lambda.min)
+
+```
+
+### Logistic Ridge Regression
+```{r L2,echo=TRUE,massage=FALSE,warning=FALSE}
+#Pre-select best lambda from cv.glmnet
+#Set x,y
+x <- model.matrix(Target ~ ., data = data)
+y <- data$Target
+
+ridge.logis.reg <- cv.glmnet(x,y,
+                             alpha = 0,
+                             family = "multinomial")
+
+#pre-selected lambda
+best_lambda <- ridge.logis.reg$lambda.min
+
+#expand best lambda
+expanded_lambda <- seq(best_lambda * 0.9, best_lambda * 1.1, length.out = 10)
+#_______________________________________________________________________________
+#Accuracy for each fold
+ac<-c()
+
+#precision for each fold
+pc0 <- c()
+pc1 <- c()
+pc2 <- c()
+pc3 <- c()
+pc4 <- c()
+
+#recall for each fold
+rc0 <- c()
+rc1 <- c()
+rc2 <- c()
+rc3 <- c()
+rc4 <- c()
+
+#table confusion
+tablemat <- matrix(0,nrow=5,ncol=5)
+#_______________________________________________________________________________
+#Model training
+for (i in 1:k) {
+  #train test
+  train <- unlist(fold[-i])
+  test <- unlist(fold[i])
+  data_train <- data[train, ]
+  data_test <- data[test, ]
+  
+  #set x y
+  x.train <- as.matrix(data_train[,-14])
+  y.train <- data_train$Target
+  
+  #lasso model (pre lambda)
+  Ridge.fit <- cv.glmnet(x.train, y.train, family ="multinomial",
+                  alpha = 0,
+                  lambda = expanded_lambda)
+  x.test <- as.matrix(data_test[,-14])
+  
+  #prediction
+  predictions <- predict(Ridge.fit,newx=x.test,type="response")
+  predicted <- apply(predictions, 1, which.max)
+  
+  #confusion matrix
+  table <- table(predicted,data_test$Target)
+  
+  #resize
+  if (length(table) != 25){
+    table <- resize(table)
+  }
+  tablemat <- tablemat + table
+  
+  #performance on train set 80% using k-folds
+  ##accuracy
+  ac[i] <- sum(diag(table))/sum(table)
+  
+  ##precision
+  pc0[i] <- table[1,1]/sum(table[,1])
+  pc1[i] <- table[2,2]/sum(table[,2])
+  pc2[i] <- table[3,3]/sum(table[,3])
+  pc3[i] <- table[4,4]/sum(table[,4])
+  pc4[i] <- table[5,5]/sum(table[,5])
+  
+  ##recall
+  rc0[i] <- table[1,1]/sum(table[1,])
+  rc1[i] <- table[2,2]/sum(table[2,])
+  rc2[i] <- table[3,3]/sum(table[3,])
+  rc3[i] <- table[4,4]/sum(table[4,])
+  rc4[i] <- table[5,5]/sum(table[5,])
+}
+#_______________________________________________________________________________
+#prediction on test set
+x.test <- x.test <- as.matrix(data.test[,-14])
+predictions <- predict(Ridge.fit,newx=x.test,type="response")
+predicted <- apply(predictions, 1, which.max)
+table <- table(predicted,data.test$Target)
+#performance on test set
+ac.t <- sum(diag(table))/sum(table)
+#precision
+pc0t <- table[1,1]/sum(table[,1])
+pc1t <- table[2,2]/sum(table[,2])
+pc2t <- table[3,3]/sum(table[,3])
+pc3t <- table[4,4]/sum(table[,4])
+pc4t <- table[5,5]/sum(table[,5])
+#recall
+rc0t <- table[1,1]/sum(table[1,])
+rc1t <- table[2,2]/sum(table[2,])
+rc2t <- table[3,3]/sum(table[3,])
+rc3t <- table[4,4]/sum(table[4,])
+rc4t <- table[5,5]/sum(table[5,])
+#_______________________________________________________________________________
+#performance on train
+model.Ridge.perf <- matrix(c(mean(ac),mean(pc0),mean(pc1),
+                              mean(pc2),mean(pc3),mean(pc4),
+                              mean(rc0),mean(rc1),mean(rc2),
+                              mean(rc3),mean(rc4)),
+                           nrow = 11, ncol = 1, byrow = FALSE)
+
+#performance on test
+model.Ridge.perf.test <- matrix(c(ac.t,pc0t,pc1t,pc2t,pc3t,pc4t,
+                          rc0t,rc1t,rc2t,rc3t,rc4t),
+                       nrow = 11, ncol = 1, byrow = FALSE)
+
+#format.4f
+model.Ridge.perf.formatted <- matrix(sprintf("%.4f", model.Ridge.perf.test),
+                                  nrow = 11, ncol = 1,
+                                  dimnames = list(c("Accuracy","Precision type0",
+                                                    "Precision type1","Precision type2",
+                                                    "Precision type3","Precision type4",
+                                                    "Recall type0","Recall type1",
+                                                    "Recall type2","Recall type3",
+                                                    "Recall type4"),
+                                                  c("Logistic Ridge regression")))
+
+#output
+print(model.Ridge.perf.formatted)
+cat("Confusion Matrix :","\n")
+print(table)
+cat("\n","Lambda :",lasso.pl$lambda.min)
+```
+
+## Decision Tree {.tabset}
+### Decision Tree
+```{r DT,echo=TRUE,massage=FALSE,warning=FALSE}
+#performance on train 80%
+#precision (each fold)
+pc0 <- c()
+pc1 <- c()
+pc2 <- c()
+pc3 <- c()
+pc4 <- c()
+
+#recall (each fold)
+rc0 <- c()
+rc1 <- c()
+rc2 <- c()
+rc3 <- c()
+rc4 <- c()
+
+#ac (each fold)
+ac <- c()
+
+#confusion matrix
+tablemat <- matrix(0,nrow=5,ncol=5)
+#_______________________________________________________________________________
+for (i in 1:k){
+  #train test set
+  train <- unlist(fold[-i])
+  test <- unlist(fold[i])
+  data_train <- data[train, ]
+  data_test <- data[test, ]
+  target.test<-data_test$Target
+  
+  #Tree
+  tree.h =tree(Target~. ,data=data_train)
+  cv.h=cv.tree(tree.h,FUN=prune.misclass)
+  
+  #best pruning
+  prune.h <- prune.misclass(tree.h ,
+                            best=cv.h$size[which.min(cv.h$dev)])
+  
+  #prediction
+  tree.pred = predict(prune.h,newdata = data_test)
+  predicted <- apply(tree.pred, 1, which.max)
+  
+  #confusion matrix
+  table = table(predicted,target.test)
+  if (length(table) != 25){
+    table <- resize(table)
+  }
+  tablemat <- tablemat+table
+  
+  #performance on train set 80% using k-folds
+  #precision
+  pc0[i] <- table[1,1]/sum(table[,1])
+  pc1[i] <- table[2,2]/sum(table[,2])
+  pc2[i] <- table[3,3]/sum(table[,3])
+  pc3[i] <- table[4,4]/sum(table[,4])
+  pc4[i] <- table[5,5]/sum(table[,5])
+  #recall
+  rc0[i] <- table[1,1]/sum(table[1,])
+  rc1[i] <- table[2,2]/sum(table[2,])
+  rc2[i] <- table[3,3]/sum(table[3,])
+  rc3[i] <- table[4,4]/sum(table[4,])
+  rc4[i] <- table[5,5]/sum(table[5,])
+  #Accuracy
+  ac[i] <- sum(diag(table))/sum(table)
+}
+#_______________________________________________________________________________
+#prediction on test set
+predictions <- predict(prune.h,newdata = data.test)
+predicted <- apply(predictions, 1, which.max)
+
+#performance on test set
+table <- table(predicted,data.test$Target)
+ac.t <- sum(diag(table))/sum(table)
+#precision
+pc0t <- table[1,1]/sum(table[,1])
+pc1t <- table[2,2]/sum(table[,2])
+pc2t <- table[3,3]/sum(table[,3])
+pc3t <- table[4,4]/sum(table[,4])
+pc4t <- table[5,5]/sum(table[,5])
+#recall
+rc0t <- table[1,1]/sum(table[1,])
+rc1t <- table[2,2]/sum(table[2,])
+rc2t <- table[3,3]/sum(table[3,])
+rc3t <- table[4,4]/sum(table[4,])
+rc4t <- table[5,5]/sum(table[5,])
+#_______________________________________________________________________________
+#performance
+model.DT.perf <- matrix(c(mean(ac),mean(pc0),mean(pc1),
+                              mean(pc2),mean(pc3),mean(pc4),
+                              mean(rc0),mean(rc1),mean(rc2),
+                              mean(rc3),mean(rc4)),
+                           nrow = 11, ncol = 1, byrow = FALSE)
+
+
+#performance on test
+model.DT.perf.test <- matrix(c(ac.t,pc0t,pc1t,pc2t,pc3t,pc4t,
+                          rc0t,rc1t,rc2t,rc3t,rc4t),
+                       nrow = 11, ncol = 1, byrow = FALSE)
+
+#format.4f
+model.DT.perf.formatted <- matrix(sprintf("%.4f", model.DT.perf.test),
+                                  nrow = 11, ncol = 1,
+                                  dimnames = list(c("Accuracy","Precision type0",
+                                                    "Precision type1","Precision type2",
+                                                    "Precision type3","Precision type4",
+                                                    "Recall type0","Recall type1",
+                                                    "Recall type2","Recall type3",
+                                                    "Recall type4"),
+                                                  c("Decision Tree")))
+
+#output
+print(model.DT.perf.formatted)
+cat("Confusion Matrix :","\n")
+print(table)
+
+```
+
+### Bagging Decision Tree
+```{r BagDT,echo=TRUE,massage=FALSE,warning=FALSE}
+#tune parameter
+md <- 3:5
+nb <- seq(100,500,by = 100)
+#_______________________________________________________________________________
+#performance on train set 80%
+#precision for each loop
+pc0 <- c()
+pc1 <- c()
+pc2 <- c()
+pc3 <- c()
+pc4 <- c()
+
+#recall for each loop
+rc0 <- c()
+rc1 <- c()
+rc2 <- c()
+rc3 <- c()
+rc4 <- c()
+
+#ac for each loop
+ac <- c()
+
+#confusion matrix
+table.list <- list()
+#_______________________________________________________________________________
+#performance for test set 20%
+ac.t <- c()
+#precision
+pc0t <- c()
+pc1t <- c()
+pc2t <- c()
+pc3t <- c()
+pc4t <- c()
+#recall
+rc0t <- c()
+rc1t <- c()
+rc2t <- c()
+rc3t <- c()
+rc4t <- c()
+
+#confusion matrix list
+table.test.list <- list()
+#_______________________________________________________________________________
+#Model training
+for(j in nb){
+  for(f in md){
+    tablemat<- matrix(0,nrow=5,ncol=5)
+    for(i in 1:k){
+      #train test
+      train <- unlist(fold[-i])
+      test <- unlist(fold[i])
+      data_train <- data[train, ]
+      data_test <- data[test, ]
+      #target.test <- data_test$Target
+      
+      #model
+      bag.dt <- bagging(Target ~ .,
+                        data = data_train,
+                        coob=TRUE, nbagg=j,
+                        control=rpart.control(maxdepth=f))
+      
+      #prediction
+      bag.dt.pred <- predict(bag.dt,newdata = data_test,type = "prob")
+      predicted <- apply(bag.dt.pred, 1, which.max)
+      length(predicted)
+      length(data_test$Target)
+      table = table(predicted,data_test$Target)
+      #resize
+      if (length(table) != 25){
+          table <- resize(table)
+      }
+      tablemat <- tablemat + table
+      length(table)
+    }
+    #performance on train set 80% using k-folds
+    #Accuracy
+    ac <- append(ac,sum(diag(tablemat))/sum(tablemat))
+    
+    #Precision
+    pc0 <- append(pc0,tablemat[1,1]/sum(tablemat[,1]))
+    pc1 <- append(pc1,tablemat[2,2]/sum(tablemat[,2]))
+    pc2 <- append(pc2,tablemat[3,3]/sum(tablemat[,3]))
+    pc3 <- append(pc3,tablemat[4,4]/sum(tablemat[,4]))
+    pc4 <- append(pc4,tablemat[5,5]/sum(tablemat[,5]))
+    
+    #Recall
+    rc0 <- append(rc0,tablemat[1,1]/sum(tablemat[1,]))
+    rc1 <- append(rc1,tablemat[2,2]/sum(tablemat[2,]))
+    rc2 <- append(rc2,tablemat[3,3]/sum(tablemat[3,]))
+    rc3 <- append(rc3,tablemat[4,4]/sum(tablemat[4,]))
+    rc4 <- append(rc4,tablemat[5,5]/sum(tablemat[5,]))
+    
+    #confusion matrix list
+    table.list <- c(table.list, list(tablemat))
+    #___________________________________________________________________________
+    #performance on test set 
+    #prediction
+    test.set.prediction <- predict(bag.dt,newdata = data.test,type = "prob")
+    predicted.t <- apply(test.set.prediction, 1, which.max)
+    
+    table = table(predicted.t,data.test$Target)
+    #performance 
+    ac.t <- append(ac.t,sum(diag(table))/sum(table))
+    #precision
+    pc0t <- append(pc0t,table[1,1]/sum(table[,1]))
+    pc1t <- append(pc1t,table[2,2]/sum(table[,2]))
+    pc2t <- append(pc2t,table[3,3]/sum(table[,3]))
+    pc3t <- append(pc3t,table[4,4]/sum(table[,4]))
+    pc4t <- append(pc4t,table[5,5]/sum(table[,5]))
+    #recall
+    rc0t <- append(rc0t,table[1,1]/sum(table[1,]))
+    rc1t <- append(rc1t,table[2,2]/sum(table[2,]))
+    rc2t <- append(rc2t,table[3,3]/sum(table[3,]))
+    rc3t <- append(rc3t,table[4,4]/sum(table[4,]))
+    rc4t <- append(rc4t,table[5,5]/sum(table[5,]))
+    
+    
+    #confusion matrix list on test set
+    table.test.list <- c(table.test.list, list(table))
+  }
+}
+#_______________________________________________________________________________
+#performance matrix on train set
+model.bagDT.perf <- matrix(c(ac[which.max(ac)],pc0[which.max(ac)],
+                             pc1[which.max(ac)],pc2[which.max(ac)],
+                             pc3[which.max(ac)],pc4[which.max(ac)],
+                             rc1[which.max(ac)],rc2[which.max(ac)],
+                             rc3[which.max(ac)],rc4[which.max(ac)]),
+                           nrow = 11, ncol = 1, byrow = FALSE)
+
+#performance matrix on test set
+model.bagDT.perf.test <- matrix(c(ac.t[which.max(ac)],pc0t[which.max(ac)],
+                                  pc1t[which.max(ac)],pc2t[which.max(ac)],
+                                  pc3t[which.max(ac)],pc4t[which.max(ac)],
+                                  rc0t[which.max(ac)],rc1t[which.max(ac)],
+                                  rc2t[which.max(ac)],rc3t[which.max(ac)],
+                                  rc4t[which.max(ac)]),
+                       nrow = 11, ncol = 1, byrow = FALSE)
+
+#format.4f
+model.bagDT.perf.formatted <- matrix(sprintf("%.4f", model.bagDT.perf.test),
+                                  nrow = 11, ncol = 1,
+                                  dimnames = list(c("Accuracy","Precision type0",
+                                                    "Precision type1","Precision type2",
+                                                    "Precision type3","Precision type4",
+                                                    "Recall type0","Recall type1",
+                                                    "Recall type2","Recall type3",
+                                                    "Recall type4"),
+                                                  c("Bagging Decision Tree")))
+
+#output
+print(model.bagDT.perf.formatted)
+cat("Confusion Matrix :","\n")
+print(table.test.list[which.max(ac)])
+```
+
+## Random Forest
+```{r RF,echo=TRUE,massage=FALSE,warning=FALSE}
+#Tune parameter
+mt <- 1:4
+nt <- seq(1000,5000,by=1000)
+#_______________________________________________________________________________
+#performance for train set 80%
+#confusion matrix list
+table.list <- list()
+
+#precision for each loop
+pc0 <- c()
+pc1 <- c()
+pc2 <- c()
+pc3 <- c()
+pc4 <- c()
+
+#recall for each loop
+rc0 <- c()
+rc1 <- c()
+rc2 <- c()
+rc3 <- c()
+rc4 <- c()
+
+#ac for each loop
+ac <- c()
+#_______________________________________________________________________________
+#performance for test set 20%
+ac.t <- c()
+#precision
+pc0t <- c()
+pc1t <- c()
+pc2t <- c()
+pc3t <- c()
+pc4t <- c()
+#recall
+rc0t <- c()
+rc1t <- c()
+rc2t <- c()
+rc3t <- c()
+rc4t <- c()
+
+#confusion matrix list
+table.test.list <- list()
+#_______________________________________________________________________________
+#Model training
+for(m in mt){
+  tablemat<- matrix(0,nrow=5,ncol=5)
+  for(n in nt){
+    for(i in 1:k){
+      #train test
+      train <- unlist(fold[-i])
+      test <- unlist(fold[i])
+      data_train <- data[train, ]
+      data_test <- data[test, ]
+      target.test <- data_test$Target
+      
+      #model
+      rf.h = randomForest(Target~.,data=data_train ,
+                          mtry = m,
+                          ntree = n,
+                          importance =TRUE)
+      
+      #prediction
+      rf.pred=predict(rf.h,newdata = data_test,type="prob")
+      predicted <- apply(rf.pred, 1, which.max)
+      
+      #confusion matrix
+      table = table(predicted,data_test$Target)
+      #resize
+      if (length(table) != 25){
+        table <- resize(table)
+      }
+      tablemat <- tablemat + table
+    }
+    #performance on train set 80% using k-folds
+    #Accuracy
+    ac <- append(ac,sum(diag(tablemat))/sum(tablemat))
+    
+    #Precision
+    pc0 <- append(pc0,tablemat[1,1]/sum(tablemat[,1]))
+    pc1 <- append(pc1,tablemat[2,2]/sum(tablemat[,2]))
+    pc2 <- append(pc2,tablemat[3,3]/sum(tablemat[,3]))
+    pc3 <- append(pc3,tablemat[4,4]/sum(tablemat[,4]))
+    pc4 <- append(pc4,tablemat[5,5]/sum(tablemat[,5]))
+    
+    #Recall
+    rc0 <- append(rc0,tablemat[1,1]/sum(tablemat[1,]))
+    rc1 <- append(rc1,tablemat[2,2]/sum(tablemat[2,]))
+    rc2 <- append(rc2,tablemat[3,3]/sum(tablemat[3,]))
+    rc3 <- append(rc3,tablemat[4,4]/sum(tablemat[4,]))
+    rc4 <- append(rc4,tablemat[5,5]/sum(tablemat[5,]))
+    
+    #confusion martrix list
+    table.list <- c(table.list, list(tablemat))
+    
+    #___________________________________________________________________________
+    #performance on test set 
+    #prediction
+    test.set.prediction <- predict(rf.h,newdata = data.test,type="prob")
+    predicted.t <- apply(test.set.prediction, 1, which.max)
+    
+    table = table(predicted.t,data.test$Target)
+    #performance 
+    ac.t <- append(ac.t,sum(diag(table))/sum(table))
+    #precision
+    pc0t <- append(pc0t,table[1,1]/sum(table[,1]))
+    pc1t <- append(pc1t,table[2,2]/sum(table[,2]))
+    pc2t <- append(pc2t,table[3,3]/sum(table[,3]))
+    pc3t <- append(pc3t,table[4,4]/sum(table[,4]))
+    pc4t <- append(pc4t,table[5,5]/sum(table[,5]))
+    #recall
+    rc0t <- append(rc0t,table[1,1]/sum(table[1,]))
+    rc1t <- append(rc1t,table[2,2]/sum(table[2,]))
+    rc2t <- append(rc2t,table[3,3]/sum(table[3,]))
+    rc3t <- append(rc3t,table[4,4]/sum(table[4,]))
+    rc4t <- append(rc4t,table[5,5]/sum(table[5,]))
+    
+    
+    #confusion matrix list on test set
+    table.test.list <- c(table.test.list, list(table))
+  }
+}
+#_______________________________________________________________________________
+#performance on train set
+model.RF.perf <- matrix(c(ac[which.max(ac)],pc0[which.max(ac)],
+                             pc1[which.max(ac)],pc2[which.max(ac)],
+                             pc3[which.max(ac)],pc4[which.max(ac)],
+                             rc1[which.max(ac)],rc2[which.max(ac)],
+                             rc3[which.max(ac)],rc4[which.max(ac)]),
+                           nrow = 11, ncol = 1, byrow = FALSE)
+
+#performance on test set (on best model)
+model.RF.perf.test <- matrix(c(ac.t[which.max(ac)],pc0t[which.max(ac)],
+                                  pc1t[which.max(ac)],pc2t[which.max(ac)],
+                                  pc3t[which.max(ac)],pc4t[which.max(ac)],
+                                  rc0t[which.max(ac)],rc1t[which.max(ac)],
+                                  rc2t[which.max(ac)],rc3t[which.max(ac)],
+                                  rc4t[which.max(ac)]),
+                       nrow = 11, ncol = 1, byrow = FALSE)
+
+#format.4f
+model.RF.perf.formatted <- matrix(sprintf("%.4f", model.RF.perf.test),
+                                  nrow = 11, ncol = 1,
+                                  dimnames = list(c("Accuracy","Precision type0",
+                                                    "Precision type1","Precision type2",
+                                                    "Precision type3","Precision type4",
+                                                    "Recall type0","Recall type1",
+                                                    "Recall type2","Recall type3",
+                                                    "Recall type4"),
+                                                  c("Random Forest")))
+
+#output
+print(model.RF.perf.formatted)
+cat("Confusion Matrix :","\n")
+print(table.test.list[which.max(ac)])
+```
+
+## Gradient Boosting
+```{r GB,echo=TRUE,massage=FALSE,warning=FALSE}
+#Tune parameter
+dep <- 1:3
+nt <- seq(1000,5000,by=1000)
+#_______________________________________________________________________________
+#ac for each loop
+ac <- c()
+
+#precision for each loop
+pc0 <- c()
+pc1 <- c()
+pc2 <- c()
+pc3 <- c()
+pc4 <- c()
+
+#recall for each loop
+rc0 <- c()
+rc1 <- c()
+rc2 <- c()
+rc3 <- c()
+rc4 <- c()
+
+#confusion matrix list
+table.list <- list()
+#_______________________________________________________________________________
+#performance for test set 20%
+ac.t <- c()
+#precision
+pc0t <- c()
+pc1t <- c()
+pc2t <- c()
+pc3t <- c()
+pc4t <- c()
+#recall
+rc0t <- c()
+rc1t <- c()
+rc2t <- c()
+rc3t <- c()
+rc4t <- c()
+
+#confusion matrix list
+table.test.list <- list()
+#_______________________________________________________________________________
+#Model training
+for(d in dep){
+  for(n in nt){
+    tablemat<- matrix(0, nrow=5, ncol=5)
+    for(i in 1:k){
+      #train test
+      train <- unlist(fold[-i])
+      test <- unlist(fold[i])
+      data_train <- data[train, ]
+      data_test <- data[test, ]
+      target.test <- data_test$Target
+      
+      #model
+      boost.h <- gbm(Target~., data = data_train,
+                     distribution = "multinomial",
+                     n.trees = n,
+                     interaction.depth = d,
+                     shrinkage = 0.02,
+                     verbose = FALSE)
+      
+      #prediction
+      boost.prob <- suppressMessages(predict(boost.h,
+                                             newdata = data_test,
+                                             type = "response"))
+      predicted <- apply(boost.prob, 1, which.max)
+      
+      
+      table <- table(predicted, target.test)
+      if (length(table) != 25){
+        table <- resize(table)
+      }
+      tablemat <- tablemat + table
+    }
+    #performance on train set 80% using k-folds
+    #Accuracy
+    ac <- append(ac,sum(diag(tablemat))/sum(tablemat))
+    
+    #Precision
+    pc0 <- append(pc0,tablemat[1,1]/sum(tablemat[,1]))
+    pc1 <- append(pc1,tablemat[2,2]/sum(tablemat[,2]))
+    pc2 <- append(pc2,tablemat[3,3]/sum(tablemat[,3]))
+    pc3 <- append(pc3,tablemat[4,4]/sum(tablemat[,4]))
+    pc4 <- append(pc4,tablemat[5,5]/sum(tablemat[,5]))
+    
+    #Recall
+    rc0 <- append(rc0,tablemat[1,1]/sum(tablemat[1,]))
+    rc1 <- append(rc1,tablemat[2,2]/sum(tablemat[2,]))
+    rc2 <- append(rc2,tablemat[3,3]/sum(tablemat[3,]))
+    rc3 <- append(rc3,tablemat[4,4]/sum(tablemat[4,]))
+    rc4 <- append(rc4,tablemat[5,5]/sum(tablemat[5,]))
+    
+    #confusion matrix list
+    table.list <- c(table.list, list(tablemat))
+    #___________________________________________________________________________
+    #performance on test set 
+    #prediction
+    test.set.prediction <- suppressMessages(predict(boost.h,
+                                                    newdata = data.test,
+                                                    type = "response"))
+    predicted.t <- apply(test.set.prediction, 1, which.max)
+    
+    table = table(predicted.t,data.test$Target)
+    #performance 
+    ac.t <- append(ac.t,sum(diag(table))/sum(table))
+    #precision
+    pc0t <- append(pc0t,table[1,1]/sum(table[,1]))
+    pc1t <- append(pc1t,table[2,2]/sum(table[,2]))
+    pc2t <- append(pc2t,table[3,3]/sum(table[,3]))
+    pc3t <- append(pc3t,table[4,4]/sum(table[,4]))
+    pc4t <- append(pc4t,table[5,5]/sum(table[,5]))
+    #recall
+    rc0t <- append(rc0t,table[1,1]/sum(table[1,]))
+    rc1t <- append(rc1t,table[2,2]/sum(table[2,]))
+    rc2t <- append(rc2t,table[3,3]/sum(table[3,]))
+    rc3t <- append(rc3t,table[4,4]/sum(table[4,]))
+    rc4t <- append(rc4t,table[5,5]/sum(table[5,]))
+    
+    
+    #confusion matrix list on test set
+    table.test.list <- c(table.test.list, list(table))
+  }
+}
+#_______________________________________________________________________________
+#performance on train set
+model.GB.perf <- matrix(c(ac[which.max(ac)],pc0[which.max(ac)],
+                             pc1[which.max(ac)],pc2[which.max(ac)],
+                             pc3[which.max(ac)],pc4[which.max(ac)],
+                             rc1[which.max(ac)],rc2[which.max(ac)],
+                             rc3[which.max(ac)],rc4[which.max(ac)]),
+                           nrow = 11, ncol = 1, byrow = FALSE)
+
+#performance on test set (on best model)
+model.GB.perf.test <- matrix(c(ac.t[which.max(ac)],pc0t[which.max(ac)],
+                                  pc1t[which.max(ac)],pc2t[which.max(ac)],
+                                  pc3t[which.max(ac)],pc4t[which.max(ac)],
+                                  rc0t[which.max(ac)],rc1t[which.max(ac)],
+                                  rc2t[which.max(ac)],rc3t[which.max(ac)],
+                                  rc4t[which.max(ac)]),
+                       nrow = 11, ncol = 1, byrow = FALSE)
+
+#format.4f
+model.GB.perf.formatted <- matrix(sprintf("%.4f", model.GB.perf.test),
+                                  nrow = 11, ncol = 1,
+                                  dimnames = list(c("Accuracy","Precision type0",
+                                                    "Precision type1","Precision type2",
+                                                    "Precision type3","Precision type4",
+                                                    "Recall type0","Recall type1",
+                                                    "Recall type2","Recall type3",
+                                                    "Recall type4"),
+                                                  c("Gradient Boosting")))
+
+#output
+print(model.GB.perf.formatted)
+cat("Confusion Matrix :","\n")
+print(table.test.list[which.max(ac)])
+```
+
+## XGBoost
+```{r XGB,echo=TRUE,massage=FALSE,warning=FALSE}
+#_______________________________________________________________________________
+#train set as numeric
+data$Sex <- as.numeric(data$Sex)
+data$cp <- as.numeric(data$cp)
+data$fbs <- as.numeric(data$fbs)
+data$restecg <- as.numeric(data$restecg)
+data$exang <- as.numeric(data$exang)
+data$slope <- as.numeric(data$slope)
+data$ca <- as.numeric(data$ca)
+data$thal <- as.numeric(data$thal)
+#test set as numeric
+data.test$Sex <- as.numeric(data.test$Sex)
+data.test$cp <- as.numeric(data.test$cp)
+data.test$fbs <- as.numeric(data.test$fbs)
+data.test$restecg <- as.numeric(data.test$restecg)
+data.test$exang <- as.numeric(data.test$exang)
+data.test$slope <- as.numeric(data.test$slope)
+data.test$ca <- as.numeric(data.test$ca)
+data.test$thal <- as.numeric(data.test$thal)
+#_______________________________________________________________________________
+#Tune parameter
+numberOfClasses <- length(unique(data$Target))
+nround <- seq(10,100,by = 10)
+eee <- seq(0.02, 0.05, by = 0.01)
+mdd <- 1:5
+
+#_______________________________________________________________________________
+#train set
+data_variables <- as.matrix(subset(data, select = -c(Target)))
+data_label <- as.numeric(levels(data$Target))[data$Target]
+data_matrix <- xgb.DMatrix(data = as.matrix(data_variables), label = data_label)
+
+#confusion list
+table.list <- list()
+
+#precision for each loop
+pc0 <- c()
+pc1 <- c()
+pc2 <- c()
+pc3 <- c()
+pc4 <- c()
+
+#recall for each loop
+rc0 <- c()
+rc1 <- c()
+rc2 <- c()
+rc3 <- c()
+rc4 <- c()
+
+#ac for each loop
+ac <- c()
+#_______________________________________________________________________________
+#Model training
+for (ee in eee) {
+  for (nr in nround) {
+    for (md in mdd) {
+      xgb_params <- list("eta" = ee, "max_depth" = md ,
+                         "objective" = "multi:softprob",
+                         "eval_metric" = "mlogloss",
+                         "num_class" = numberOfClasses)
+      tablemat <- matrix(0, nrow = 5, ncol = 5)
+      for (i in 1:k) {
+        # split test data and make xgb.DMatrix
+        test <- unlist(fold[i])
+        test_data <- data_variables[test,]
+        test_label <- data_label[test]
+        test_matrix <- xgb.DMatrix(data = test_data, label = test_label)
+        
+        # split train data and make xgb.DMatrix
+        train <- unlist(fold[-i])
+        train_data <- data_variables[train,]
+        train_label <- data_label[train]
+        train_matrix <- xgb.DMatrix(data = train_data, label = train_label)
+
+        # model
+        xgb_model <- xgb.train(params = xgb_params,
+                                data = train_matrix,
+                                nrounds = nr)
+
+        # prediction
+        test_pred <- predict(xgb_model, newdata = test_matrix)
+        test_prediction <- matrix(test_pred, nrow = numberOfClasses,
+                                  ncol=length(test_pred)/numberOfClasses)
+        predicted <- apply(test_prediction, 2, which.max)
+
+        # confusion matrix
+        table <- table(predicted, test_label)
+        if (length(table) != 25) {
+          table <- resize(table)
+        }
+        tablemat <- tablemat + table
+        length(predicted)
+      }
+      #performance on train set 80% using k-folds
+      # Accuracy
+      ac <- append(ac, sum(diag(tablemat)) / sum(tablemat))
+
+      # Precision
+      pc0 <- append(pc0, tablemat[1, 1] / sum(tablemat[, 1]))
+      pc1 <- append(pc1, tablemat[2, 2] / sum(tablemat[, 2]))
+      pc2 <- append(pc2, tablemat[3, 3] / sum(tablemat[, 3]))
+      pc3 <- append(pc3, tablemat[4, 4] / sum(tablemat[, 4]))
+      pc4 <- append(pc4, tablemat[5, 5] / sum(tablemat[, 5]))
+
+      # Recall
+      rc0 <- append(rc0, tablemat[1, 1] / sum(tablemat[1, ]))
+      rc1 <- append(rc1, tablemat[2, 2] / sum(tablemat[2, ]))
+      rc2 <- append(rc2, tablemat[3, 3] / sum(tablemat[3, ]))
+      rc3 <- append(rc3, tablemat[4, 4] / sum(tablemat[4, ]))
+      rc4 <- append(rc4, tablemat[5, 5] / sum(tablemat[5, ]))
+
+      # confusion matrix list
+      table.list <- c(table.list, list(tablemat))
+      #_________________________________________________________________________
+      #performance on test set 
+      #test set
+      data_variables.t <- as.matrix(subset(data.test, select = -c(Target)))
+      data_label.t <- as.numeric(levels(data.test$Target))[data.test$Target]
+      data_matrix.t <- xgb.DMatrix(data = as.matrix(data_variables.t)
+                                   ,label = data_label.t)
+      test_matrix.t <- xgb.DMatrix(data = data_variables.t, label = data_label.t)
+      
+      #prediction
+      test_pred.t <- predict(xgb_model, newdata = test_matrix.t)
+      test_prediction.t <- matrix(test_pred.t, nrow = numberOfClasses,
+                                  ncol=length(test_pred.t)/numberOfClasses)
+      predicted.t <- apply(test_prediction.t, 2, which.max)
+      table = table(predicted.t,data_label.t)
+      #_________________________________________________________________________
+      #performance 
+      ac.t <- append(ac.t,sum(diag(table))/sum(table))
+      #precision
+      pc0t <- append(pc0t,table[1,1]/sum(table[,1]))
+      pc1t <- append(pc1t,table[2,2]/sum(table[,2]))
+      pc2t <- append(pc2t,table[3,3]/sum(table[,3]))
+      pc3t <- append(pc3t,table[4,4]/sum(table[,4]))
+      pc4t <- append(pc4t,table[5,5]/sum(table[,5]))
+      #recall
+      rc0t <- append(rc0t,table[1,1]/sum(table[1,]))
+      rc1t <- append(rc1t,table[2,2]/sum(table[2,]))
+      rc2t <- append(rc2t,table[3,3]/sum(table[3,]))
+      rc3t <- append(rc3t,table[4,4]/sum(table[4,]))
+      rc4t <- append(rc4t,table[5,5]/sum(table[5,]))
+      
+      
+      #confusion matrix list on test set
+      table.test.list <- c(table.test.list, list(table))
+    }
+  }
+}
+#_______________________________________________________________________________
+#performance on train set
+model.XGB.perf <- matrix(c(ac[which.max(ac)],pc0[which.max(ac)],
+                             pc1[which.max(ac)],pc2[which.max(ac)],
+                             pc3[which.max(ac)],pc4[which.max(ac)],
+                             rc1[which.max(ac)],rc2[which.max(ac)],
+                             rc3[which.max(ac)],rc4[which.max(ac)]),
+                           nrow = 11, ncol = 1, byrow = FALSE)
+
+#performance on test set (on best model)
+model.XGB.perf.test <- matrix(c(ac.t[which.max(ac)],pc0t[which.max(ac)],
+                                  pc1t[which.max(ac)],pc2t[which.max(ac)],
+                                  pc3t[which.max(ac)],pc4t[which.max(ac)],
+                                  rc0t[which.max(ac)],rc1t[which.max(ac)],
+                                  rc2t[which.max(ac)],rc3t[which.max(ac)],
+                                  rc4t[which.max(ac)]),
+                       nrow = 11, ncol = 1, byrow = FALSE)
+
+#format.4f
+model.XGB.perf.formatted <- matrix(sprintf("%.4f", model.XGB.perf.test),
+                                  nrow = 11, ncol = 1,
+                                  dimnames = list(c("Accuracy","Precision type0",
+                                                    "Precision type1","Precision type2",
+                                                    "Precision type3","Precision type4",
+                                                    "Recall type0","Recall type1",
+                                                    "Recall type2","Recall type3",
+                                                    "Recall type4"),
+                                                  c("XGBoost")))
+
+#output
+print(model.XGB.perf.formatted)
+cat("Confusion Matrix :","\n")
+print(table.test.list[which.max(ac)])
+```
+
+## Compare performance for each model
+```{r CM,echo=TRUE,massage=FALSE,warning=FALSE}
+comp <- matrix(c(model.LR.perf.formatted,model.Lasso.perf.formatted,
+                 model.Ridge.perf.formatted,model.DT.perf.formatted,
+                 model.RF.perf.formatted,model.bagDT.perf.formatted,
+                 model.GB.perf.formatted,model.XGB.perf.formatted),
+               nrow=11,ncol=8, byrow=FALSE)
+
+rownames(comp)<- c("Accuracy","Precision type0","Precision type1","Precision type2",
+                   "Precision type3","Precision type4","Recall type0","Recall type1",
+                   "Recall type2","Recall type3","Recall type4")
+
+colnames(comp)<- c("Logistic","Lasso","Ridge","Decision Tree","Random Forest",
+                   "Bagging DT","Gradient Boosting","XGBoost")
+print(comp)
+```
+
+## Important Features
+```{r if,echo=TRUE,massage=FALSE,warning=FALSE}
+library(ggplot2)
+
+importance_values <- importance(rf.h)
+importance_df <- data.frame(Variable = row.names(importance_values),
+                            Importance = importance_values[, 1])
+
+# สร้างกราฟแสดงความสำคัญของตัวแปร
+ggplot(importance_df, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  xlab("Features") +
+  ylab("importance") +
+  ggtitle("Random Forest") +
+  theme_minimal()
+```
+
